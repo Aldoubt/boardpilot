@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -r requirements.txt
-      - run: python -m unittest -v test_deployer
+      - run: python -m unittest discover -v
       - name: Check Python 3.8 syntax
         run: python -c "import ast,pathlib; [ast.parse(p.read_text(encoding='utf-8'),feature_version=(3,8)) for p in pathlib.Path('.').glob('*.py')]"
       - name: GUI smoke test on Windows

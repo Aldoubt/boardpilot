@@ -14,7 +14,8 @@ import unittest
 from unittest.mock import patch
 
 from deployer_core import (Cancelled,SSHSession,inspect_workspace,package_workspace,
-                           validate_connection)
+                           validate_connection,NOETIC_CATKIN_TOPLEVEL_TARGET,
+                           NOETIC_CATKIN_TOPLEVEL_CONTENT)
 from remote_helpers import EXTRACT_CODE
 
 
@@ -67,6 +68,81 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaises(Cancelled):package_workspace(self.repo,self.base/'packages',cancel=cancel)
         self.assertEqual(list((self.base/'packages').glob('*.tar.gz')),[])
         self.assertEqual(list((self.base/'packages').glob('*.part')),[])
+
+    def track_symlink_placeholder(self, name, target):
+        # Windows Git checkouts can store mode 120000 as an ordinary text file.
+        path=self.repo/name;path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(target,encoding='utf-8')
+        blob=self.git('hash-object','-w',str(path)).decode().strip()
+        self.git('update-index','--add','--cacheinfo','120000',blob,name)
+        return path
+
+    def assert_materialized_catkin_link(self, receipt, name):
+        with tarfile.open(receipt['path']) as tar:
+            entry=tar.getmember(name)
+            self.assertTrue(entry.isfile());self.assertFalse(entry.issym())
+            self.assertEqual(entry.mode,0o644);self.assertEqual(entry.linkname,'')
+            self.assertEqual(tar.extractfile(entry).read(),NOETIC_CATKIN_TOPLEVEL_CONTENT)
+            manifest=json.load(tar.extractfile('.boardpilot-manifest.json'))
+            self.assertEqual(manifest['catkin_toplevel_links_materialized'],[
+                {'path':name,'original_target':NOETIC_CATKIN_TOPLEVEL_TARGET}])
+        # The packaged representation also passes the remote extraction boundary.
+        result=self.extract(receipt['path'],self.base/'catkin-stage')
+        self.assertEqual(result.returncode,0,result.stderr)
+        extracted=self.base/'catkin-stage/source'/name
+        self.assertTrue(extracted.is_file());self.assertFalse(extracted.is_symlink())
+        self.assertEqual(extracted.read_bytes(),NOETIC_CATKIN_TOPLEVEL_CONTENT)
+
+    def test_noetic_catkin_git_symlink_placeholder_is_materialized(self):
+        name='example_pro/fuel/CMakeLists.txt'
+        path=self.track_symlink_placeholder(name,NOETIC_CATKIN_TOPLEVEL_TARGET)
+        self.assertFalse(path.is_symlink())
+        logs=[]
+        receipt=package_workspace(self.repo,self.base/'packages',log=logs.append)
+        self.assert_materialized_catkin_link(receipt,name)
+        self.assertEqual(path.read_text(encoding='utf-8'),NOETIC_CATKIN_TOPLEVEL_TARGET)
+        self.assertTrue(any(name in line and '转换' in line for line in logs))
+
+    def test_noetic_catkin_real_symlink_is_materialized(self):
+        name='example_pro/fuel/CMakeLists.txt'
+        path=self.repo/name;path.parent.mkdir(parents=True)
+        try:path.symlink_to(NOETIC_CATKIN_TOPLEVEL_TARGET)
+        except (OSError,NotImplementedError) as exc:
+            self.skipTest('real symlinks unavailable on this host: '+str(exc))
+        self.assertTrue(path.is_symlink())
+        # inspect_workspace includes untracked symlinks, even if the target does not exist.
+        receipt=self.package()
+        self.assert_materialized_catkin_link(receipt,name)
+        self.assertEqual(os.readlink(path),NOETIC_CATKIN_TOPLEVEL_TARGET)
+
+    def test_external_links_other_than_exact_noetic_catkin_entry_are_rejected(self):
+        cases=[
+            ('nested/CMakeLists.txt','/etc/passwd'),
+            ('nested/other.cmake',NOETIC_CATKIN_TOPLEVEL_TARGET),
+            ('nested/CMakeLists.txt','/opt/ros/noetic/share/catkin/cmake/../cmake/toplevel.cmake'),
+            ('nested/CMakeLists.txt','/opt/ros/melodic/share/catkin/cmake/toplevel.cmake'),
+            ('nested/CMakeLists.txt',NOETIC_CATKIN_TOPLEVEL_TARGET+'\n'),
+            ('nested/CMakeLists.txt','../../outside'),
+        ]
+        for name,target in cases:
+            with self.subTest(name=name,target=target):
+                path=self.track_symlink_placeholder(name,target)
+                try:
+                    with self.assertRaisesRegex(ValueError,'符号链接超出源码目录'):
+                        self.package()
+                    self.assertEqual(list((self.base/'packages').glob('*.part')),[])
+                    self.assertEqual(list((self.base/'packages').glob('*.tar.gz')),[])
+                finally:
+                    self.git('update-index','--force-remove',name);path.unlink()
+
+    def test_internal_symlink_remains_a_symlink(self):
+        self.track_symlink_placeholder('nested/alias','../build.sh')
+        receipt=self.package()
+        with tarfile.open(receipt['path']) as tar:
+            entry=tar.getmember('nested/alias')
+            self.assertTrue(entry.issym());self.assertEqual(entry.linkname,'../build.sh')
+            manifest=json.load(tar.extractfile('.boardpilot-manifest.json'))
+            self.assertEqual(manifest['catkin_toplevel_links_materialized'],[])
 
     def extract(self,archive,stage,sha=None):
         return subprocess.run([sys.executable,'-c',EXTRACT_CODE,str(archive),str(stage),sha or hashlib.sha256(Path(archive).read_bytes()).hexdigest()],capture_output=True,text=True)

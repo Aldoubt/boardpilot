@@ -10,8 +10,8 @@
 
 在 [Releases](https://github.com/Aldoubt/boardpilot/releases) 下载：
 
-- **Windows x64**：运行 `BoardPilot-0.1.0-windows-x64.exe`，不需要安装 Python。首次打开自解压需要几秒钟。
-- **Ubuntu 22.04 / 24.04 x86_64**：解压 `BoardPilot-0.1.0-linux-x86_64.tar.gz`，在解压目录运行 `bash install.sh`，然后从应用菜单打开 BoardPilot；也可以直接运行其中的 `./BoardPilot`。需要图形桌面以及 `python3`（安装菜单入口时使用），应用运行不需要自行安装 Python 依赖。源码打包还需要 `git`。
+- **Windows x64**：运行 `BoardPilot-0.1.1-windows-x64.exe`，不需要安装 Python。首次打开自解压需要几秒钟。
+- **Ubuntu 22.04 / 24.04 x86_64**：解压 `BoardPilot-0.1.1-linux-x86_64.tar.gz`，在解压目录运行 `bash install.sh`，然后从应用菜单打开 BoardPilot；也可以直接运行其中的 `./BoardPilot`。需要图形桌面以及 `python3`（安装菜单入口时使用），应用运行不需要自行安装 Python 依赖。源码打包还需要 `git`。
 - Linux 安装只写入当前用户目录，不需要 sudo。卸载运行 `bash ~/.local/share/boardpilot/uninstall.sh`；配置和主机指纹会保留。
 - Linux 安装支持 `XDG_DATA_HOME`。ARM64/NX 本机桌面包暂未提供；NX 可作为 SSH 连接的目标。
 - 下载旁边的 `.sha256` 可用于核对文件完整性。当前预览版未做 Windows 代码签名。
@@ -37,6 +37,13 @@ python deployer_gui.py
 ```
 
 右上角可选择 100%、125%、150% 缩放，默认 125%，选择后自动保存。
+
+## 0.1.1 部署边界修复
+
+- 在预览与应用前检查 Sunray 安装器安全版本。要求安装脚本包含 `readonly SUNRAY_APPLY_SAFETY_VERSION=1`；旧脚本可能误删子模块 `.git`，会被拒绝执行。可将仓库附带的 [安全版安装脚本](presets/sunray/apply_workspace.sh) 复制到工作区内 `tools/workspace_transfer/apply_workspace.sh`，再重新打包。这个文件只负责源码搬运，不修改定位或控制算法。
+- 安全版 Sunray 安装器应保留所有层级 Git 元数据，并在包缺少目标已有的已声明子模块源码时拒绝覆盖。仅选择两个编译模块不会缩小源码安装范围。
+- 源码备份覆盖子模块未跟踪源码和已物化的非 Git 子目录；同时考虑目标与待安装源码的忽略规则，避免漏备份待删除文件。备份仍不包含构建产物或 Git 元数据。
+- 精确识别 ROS Noetic 的 `CMakeLists.txt` 顶层链接并转换为普通 Catkin 入口，转换记录写入 manifest；其他外部链接继续拒绝。
 
 ## 使用流程
 

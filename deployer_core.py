@@ -17,6 +17,23 @@ from pathlib import Path, PurePosixPath
 
 MANIFEST = '.boardpilot-manifest.json'
 PROTECTED = ('build', 'devel', 'install', 'logs', '.catkin_tools', '.venv')
+# A catkin_init_workspace link names this installed Noetic entry point. Materialize
+# only this exact link; never dereference arbitrary paths outside the source tree.
+NOETIC_CATKIN_TOPLEVEL_TARGET = '/opt/ros/noetic/share/catkin/cmake/toplevel.cmake'
+# Based on ROS catkin's Noetic toplevel flow and catkinConfig.cmake.in:
+# https://github.com/ros/catkin/blob/noetic-devel/cmake/toplevel.cmake
+# https://github.com/ros/catkin/blob/noetic-devel/cmake/catkinConfig.cmake.in
+# CATKIN_TOPLEVEL_FIND_PACKAGE is required to load the workspace macros when
+# CATKIN_TOPLEVEL is true. The target's sourced ROS environment resolves catkin.
+NOETIC_CATKIN_TOPLEVEL_CONTENT = b'''# BoardPilot: portable ROS1 Noetic catkin workspace entry point.
+cmake_minimum_required(VERSION 3.0.2)
+project(Project)
+set(CATKIN_TOPLEVEL TRUE)
+set(CATKIN_TOPLEVEL_FIND_PACKAGE TRUE)
+find_package(catkin REQUIRED NO_POLICY_SCOPE)
+unset(CATKIN_TOPLEVEL_FIND_PACKAGE)
+catkin_workspace()
+'''
 
 
 class Cancelled(Exception):
@@ -94,6 +111,7 @@ def package_workspace(root, output_dir, log=lambda x: None, progress=lambda a, b
                            (time.strftime('%Y%m%d_%H%M%S'), info['commit'][:8], uuid.uuid4().hex[:4]))
     temporary = output.with_suffix(output.suffix + '.part')
     normalized = []
+    materialized_catkin_links = []
     total = len(info['files'])
     log('源码分支 %s / %s；%s 个文件' % (info['branch'], info['commit'][:12], total))
     try:
@@ -105,14 +123,24 @@ def package_workspace(root, output_dir, log=lambda x: None, progress=lambda a, b
                 entry.uid = entry.gid = 0
                 entry.uname = entry.gname = ''
                 if path.is_symlink() or mode == '120000':
-                    target = os.readlink(path) if path.is_symlink() else path.read_text(encoding='utf-8').strip()
-                    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
-                    if target.startswith('/') or resolved == '..' or resolved.startswith('../'):
-                        raise ValueError('符号链接超出源码目录：' + name)
-                    entry.type = tarfile.SYMTYPE
-                    entry.linkname = target
-                    entry.size = 0
-                    archive.addfile(entry)
+                    target = os.readlink(path) if path.is_symlink() else path.read_text(encoding='utf-8')
+                    if (PurePosixPath(name).name == 'CMakeLists.txt' and
+                            target == NOETIC_CATKIN_TOPLEVEL_TARGET):
+                        entry.type = tarfile.REGTYPE
+                        entry.linkname = ''
+                        entry.mode = 0o644
+                        entry.size = len(NOETIC_CATKIN_TOPLEVEL_CONTENT)
+                        archive.addfile(entry, io.BytesIO(NOETIC_CATKIN_TOPLEVEL_CONTENT))
+                        materialized_catkin_links.append({'path': name, 'original_target': target})
+                        log('Noetic Catkin 顶层链接已转换为普通文件：%s（%s）' % (name, target))
+                    else:
+                        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+                        if target.startswith('/') or resolved == '..' or resolved.startswith('../'):
+                            raise ValueError('符号链接超出源码目录：' + name)
+                        entry.type = tarfile.SYMTYPE
+                        entry.linkname = target
+                        entry.size = 0
+                        archive.addfile(entry)
                 else:
                     entry.mode = 0o755 if mode == '100755' else 0o644
                     if name.endswith('.sh'):
@@ -128,7 +156,8 @@ def package_workspace(root, output_dir, log=lambda x: None, progress=lambda a, b
                 progress(index, total)
             manifest = {k: v for k, v in info.items() if k not in ('root', 'files')}
             manifest.update(format_version=1, created_at=time.strftime('%Y-%m-%dT%H:%M:%S%z'),
-                            file_count=total, shell_files_normalized_to_lf=normalized)
+                            file_count=total, shell_files_normalized_to_lf=normalized,
+                            catkin_toplevel_links_materialized=materialized_catkin_links)
             data = json.dumps(manifest, ensure_ascii=False, indent=2).encode('utf-8')
             entry = tarfile.TarInfo(MANIFEST)
             entry.size = len(data)
@@ -359,19 +388,25 @@ class SSHSession:
         return result
 
     def apply_command(self, stage, target, preview=True):
+        from remote_helpers import INSTALLER_PREFLIGHT_CODE
         source = self.path(stage['source'])
         target = self.path(target)
         if target in ('/', self.home) or target == source or source.startswith(target+'/') or target.startswith(source+'/'):
             raise ValueError('目标必须是独立工作区目录，不能是根目录、用户目录或暂存源码目录')
         if list(self.identity) != list(stage['identity']):
             raise ValueError('暂存包属于另一台SSH主机，请重新上传')
-        return 'bash %s %s --dest %s' % (shlex.quote(source+'/tools/workspace_transfer/apply_workspace.sh'),
-                                        '--dry-run' if preview else '--yes', shlex.quote(target))
+        preflight = 'python3 -c %s %s %s' % tuple(shlex.quote(x) for x in
+                    (INSTALLER_PREFLIGHT_CODE, source, target))
+        install = 'bash %s %s --dest %s' % (shlex.quote(source+'/tools/workspace_transfer/apply_workspace.sh'),
+                                          '--dry-run' if preview else '--yes', shlex.quote(target))
+        return preflight + ' && ' + install
 
-    def backup(self, target, base, cancel=None):
+    def backup(self, target, base, cancel=None, source=None):
         from remote_helpers import BACKUP_CODE
-        command = 'python3 -c %s %s %s' % tuple(shlex.quote(x) for x in
-                   (BACKUP_CODE, self.path(target), self.path(base)))
+        args = [BACKUP_CODE, self.path(target), self.path(base)]
+        if source is not None:
+            args.append(self.path(source))
+        command = 'python3 -c ' + ' '.join(shlex.quote(x) for x in args)
         code, output = self.command(command, cancel, timeout=300)
         if code:
             raise RuntimeError('源码备份未完成，安装未执行：\n'+output)

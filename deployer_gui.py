@@ -353,7 +353,7 @@ class App:
         command=self.session.apply_command(stage,target,False)
         def work():
             self.log('备份目标源码…')
-            backup=self.session.backup(target,base,self.cancel);self.log('备份：'+str(backup.get('backup') or '目标尚不存在'))
+            backup=self.session.backup(target,base,self.cancel,source=stage['source']);self.log('备份：'+str(backup.get('backup') or '目标尚不存在'))
             code,text=self.session.command(command,self.cancel,emit=self.emit(),on_channel=self.set_channel,timeout=300)
             if code:raise RuntimeError('安装未完成；服务可能已停止，目标可能部分更新。\n'+text[-5000:])
             return text
