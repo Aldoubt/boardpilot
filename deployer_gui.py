@@ -19,11 +19,12 @@ from deployer_core import (SSHSession,UnknownHost,Cancelled,inspect_workspace,
                            package_workspace,sha256_file)
 
 ANSI=re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))')
+APP_VERSION='0.1.2'
 
 
 class App:
     def __init__(self,root):
-        self.root=root;root.title('BoardPilot · 板载部署助手')
+        self.root=root;root.title('BoardPilot '+APP_VERSION+' · 板载部署助手')
         width=min(1480,root.winfo_screenwidth()-70);height=min(1080,root.winfo_screenheight()-100)
         root.geometry('%dx%d+35+35'%(width,height));root.minsize(min(1060,width),min(760,height))
         base=Path(os.environ.get('APPDATA',str(Path.home()/'.config')))
@@ -50,7 +51,7 @@ class App:
         self.progress_text=tk.StringVar(value='等待操作');self.input=tk.StringVar();self.hide_input=tk.BooleanVar(value=False)
         families=font.families();self.face=next((x for x in ('Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC') if x in families),'TkDefaultFont')
         self.zoom=tk.StringVar(value=str(self.config.get('zoom','125%')))
-        self.font_bases={}
+        self.font_bases={};self.scroll_canvases=[]
         self.style();self.layout();self.apply_zoom()
         self.target.trace_add('write',lambda *_:self.invalidate_preview())
         self.root.after(80,self.pump);self.root.protocol('WM_DELETE_WINDOW',self.close)
@@ -85,18 +86,50 @@ class App:
         if browse:ttk.Button(row,text='选择',command=browse,width=6).pack(side='left',padx=(7,0))
         return entry
 
+    def wrapped_label(self,parent,**options):
+        options.setdefault('wraplength',760)
+        options.setdefault('justify','left')
+        label=ttk.Label(parent,**options)
+        label.bind('<Configure>',lambda event:label.configure(wraplength=max(100,event.width-4)))
+        return label
+
+    def scrollable(self,parent,padding=0):
+        outer=ttk.Frame(parent)
+        canvas=tk.Canvas(outer,background='#eef2f7',highlightthickness=0,width=1,height=1)
+        scrollbar=ttk.Scrollbar(outer,orient='vertical',command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
+        content=ttk.Frame(canvas,padding=padding)
+        window=canvas.create_window(0,0,window=content,anchor='nw')
+        content.bind('<Configure>',lambda _:canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>',lambda event:canvas.itemconfigure(window,width=event.width))
+        self.scroll_canvases.append(canvas)
+        return outer,content
+
+    def scroll_wheel(self,event):
+        widget=self.root.winfo_containing(event.x_root,event.y_root)
+        while widget is not None:
+            if widget in self.scroll_canvases:
+                if widget.yview()!=(0.0,1.0):
+                    delta=(-1 if event.num==4 else 1) if event.num in (4,5) else (-1 if event.delta>0 else 1)
+                    widget.yview_scroll(delta*3,'units')
+                    return 'break'
+                return
+            widget=getattr(widget,'master',None)
+
     def layout(self):
         self.root.columnconfigure(0,weight=1);self.root.rowconfigure(1,weight=1)
         header=ttk.Frame(self.root,padding=(25,20,25,13));header.grid(row=0,column=0,sticky='ew')
         title=ttk.Frame(header);title.pack(side='left')
-        ttk.Label(title,text='BoardPilot',style='Title.TLabel').pack(anchor='w')
+        ttk.Label(title,text='BoardPilot '+APP_VERSION,style='Title.TLabel').pack(anchor='w')
         ttk.Label(title,text='源码打包  /  SSH 传输  /  板载编译 · Sunray/ROS1 预设',style='Subtitle.TLabel').pack(anchor='w',pady=(5,0))
         ttk.Button(header,text='保存连接配置',command=self.save).pack(side='right')
         zoom_box=ttk.Combobox(header,textvariable=self.zoom,values=['100%','125%','150%'],state='readonly',width=7)
         zoom_box.pack(side='right',padx=12);zoom_box.bind('<<ComboboxSelected>>',lambda _:self.apply_zoom(True))
         ttk.Label(header,text='界面缩放').pack(side='right')
         body=ttk.Frame(self.root,padding=(20,0,20,12));body.grid(row=1,column=0,sticky='nsew')
-        left=ttk.Frame(body,width=350,padding=15);left.pack(side='left',fill='y');left.pack_propagate(False);self.sidebar=left
+        sidebar=ttk.Frame(body,width=350);sidebar.pack(side='left',fill='y');sidebar.pack_propagate(False);self.sidebar=sidebar
+        left_outer,left=self.scrollable(sidebar,padding=15);left_outer.pack(fill='both',expand=True)
         ttk.Label(left,text='板载连接',font=(self.face,13,'bold')).pack(anchor='w',pady=(0,10))
         for label,var in [('主机 IP',self.host),('SSH 端口',self.port),('用户名',self.user),('密码 / 密钥口令',self.password)]:
             ttk.Label(left,text=label).pack(anchor='w',pady=(8,3))
@@ -104,44 +137,57 @@ class App:
         ttk.Label(left,text='可选私钥文件').pack(anchor='w',pady=(10,3))
         kr=ttk.Frame(left);kr.pack(fill='x');ttk.Entry(kr,textvariable=self.key).pack(side='left',fill='x',expand=True)
         ttk.Button(kr,text='…',width=3,command=self.choose_key).pack(side='left',padx=(5,0))
-        ttk.Label(left,text='密码仅用于本次连接，不落盘。',style='Subtitle.TLabel',wraplength=260).pack(anchor='w',pady=10)
+        self.wrapped_label(left,text='密码仅用于本次连接，不落盘。',style='Subtitle.TLabel',wraplength=260).pack(fill='x',pady=10)
         self.button(left,'连接并检查环境',self.connect,True).pack(fill='x',pady=5)
         self.button(left,'断开 SSH',self.disconnect).pack(fill='x',pady=5)
-        ttk.Label(left,textvariable=self.connection,foreground='#2563a0',wraplength=260).pack(anchor='w',pady=12)
+        self.wrapped_label(left,textvariable=self.connection,foreground='#2563a0',wraplength=260).pack(fill='x',pady=12)
         ttk.Separator(left).pack(fill='x',pady=10)
         self.button(left,'打开交互式 SSH 终端',self.open_shell).pack(fill='x',pady=5)
         self.tabs=ttk.Notebook(body);self.tabs.pack(side='left',fill='both',expand=True,padx=(12,0))
-        source=ttk.Frame(self.tabs,padding=22);deploy=ttk.Frame(self.tabs,padding=22);terminal=ttk.Frame(self.tabs,padding=12)
-        self.tabs.add(source,text='1  源码打包');self.tabs.add(deploy,text='2  上传与部署');self.tabs.add(terminal,text='3  日志与终端')
-        self.terminal_tab=terminal
+        source_outer,source=self.scrollable(self.tabs,padding=22)
+        deploy_outer,deploy=self.scrollable(self.tabs,padding=22)
+        build_tab=ttk.Frame(self.tabs)
+        terminal=ttk.Frame(self.tabs,padding=12)
+        self.tabs.add(source_outer,text='1  源码打包');self.tabs.add(deploy_outer,text='2  上传与部署')
+        self.tabs.add(build_tab,text='3  板载编译');self.tabs.add(terminal,text='4  日志与终端')
+        self.build_tab=build_tab;self.terminal_tab=terminal
+        self.root.bind_all('<MouseWheel>',self.scroll_wheel,add='+')
+        self.root.bind_all('<Button-4>',self.scroll_wheel,add='+')
+        self.root.bind_all('<Button-5>',self.scroll_wheel,add='+')
         ttk.Label(source,text='把当前修改打成可追溯的源码包',font=(self.face,14,'bold')).pack(anchor='w',pady=(0,12))
         self.field(source,'源码工作区',self.workspace,self.choose_workspace)
         self.field(source,'包输出目录',self.output,self.choose_output)
         row=ttk.Frame(source);row.pack(fill='x',pady=15)
         self.button(row,'检查分支与修改',self.inspect).pack(side='left')
         self.button(row,'生成源码部署包',self.pack,True).pack(side='left',padx=10)
-        ttk.Label(source,textvariable=self.package_info,wraplength=760,justify='left',font=(self.face,11)).pack(anchor='w',fill='x',pady=15)
+        self.wrapped_label(source,textvariable=self.package_info,font=(self.face,11)).pack(fill='x',pady=15)
         ttk.Separator(source).pack(fill='x',pady=15)
         ttk.Label(source,text='打包规则',font=(self.face,12,'bold')).pack(anchor='w')
-        ttk.Label(source,text='• 按 Git 跟踪与忽略规则收集源码，包含已检出的子模块。\n• 保留配置文件，排除构建产物、日志、Git 元数据和数据集。\n• Windows 的 Shell 脚本换行会转为 LF，保留 Git 可执行权限。\n• 包含分支、提交、未提交修改清单；生成 SHA256 校验值。',wraplength=760,justify='left').pack(anchor='w',pady=12)
+        self.wrapped_label(source,text='• 按 Git 跟踪与忽略规则收集源码，包含已检出的子模块。\n• 保留配置文件，排除构建产物、日志、Git 元数据和数据集。\n• Windows 的 Shell 脚本换行会转为 LF，保留 Git 可执行权限。\n• 包含分支、提交、未提交修改清单；生成 SHA256 校验值。').pack(fill='x',pady=12)
         self.field(source,'已有部署包',self.archive,self.choose_archive)
         self.button(source,'上传并校验、解压到暂存目录',self.upload,True).pack(anchor='w',pady=15)
-        ttk.Label(deploy,text='先预览，再应用；编译在 NX 上进行',font=(self.face,14,'bold')).pack(anchor='w',pady=(0,12))
+        self.wrapped_label(deploy,text='先预览，再应用源码',font=(self.face,14,'bold')).pack(fill='x',pady=(0,12))
         self.field(deploy,'远程暂存目录',self.incoming)
         self.field(deploy,'目标工作区',self.target)
-        ttk.Label(deploy,textvariable=self.stage_info,wraplength=760,justify='left',foreground='#45617d').pack(anchor='w',fill='x',pady=10)
+        self.wrapped_label(deploy,textvariable=self.stage_info,foreground='#45617d').pack(fill='x',pady=10)
         row=ttk.Frame(deploy);row.pack(fill='x',pady=8)
         self.button(row,'预览复制与删除计划',self.preview_install).pack(side='left')
         self.button(row,'备份并应用预览计划',self.apply_install,True).pack(side='left',padx=10)
-        ttk.Label(deploy,text='安装沿用 apply_workspace.sh：保留被忽略的构建和依赖目录；覆盖同名源码，删除包内不存在的普通源码。应用前自动备份目标源码；安装后相关服务保持停止。',wraplength=760,foreground='#6a4c22').pack(anchor='w',pady=10)
-        ttk.Separator(deploy).pack(fill='x',pady=14)
-        self.field(deploy,'编译模块',self.modules)
-        self.field(deploy,'并行任务数',self.jobs)
-        ttk.Label(deploy,text='例如：livox_ros_driver2 ekf_odometry。只编译修改的模块；修改接口后还需编译依赖它的模块。',wraplength=760,style='Subtitle.TLabel').pack(anchor='w',pady=7)
-        row=ttk.Frame(deploy);row.pack(fill='x',pady=10)
-        self.button(row,'在板载启动编译',self.build,True).pack(side='left')
-        self.button(row,'查看上次编译任务',self.follow_last).pack(side='left',padx=10)
-        ttk.Label(deploy,text='编译使用板载 build.sh，在后台记录日志；SSH 断开后继续运行。编译完成不会自动启动飞行节点。',wraplength=760,style='Subtitle.TLabel').pack(anchor='w',pady=7)
+        self.wrapped_label(deploy,text='安装沿用 apply_workspace.sh：保留被忽略的构建和依赖目录；覆盖同名源码，删除包内不存在的普通源码。应用前自动备份目标源码；安装后相关服务保持停止。',foreground='#6a4c22').pack(fill='x',pady=10)
+        ttk.Button(deploy,text='下一步：板载编译',command=lambda:self.tabs.select(self.build_tab)).pack(anchor='w',pady=12)
+        actions=ttk.Frame(build_tab,padding=(22,10,22,16));actions.pack(side='bottom',fill='x')
+        self.build_button=self.button(actions,'在板载启动编译',self.build,True)
+        self.build_button.pack(fill='x',pady=(0,6))
+        self.follow_button=self.button(actions,'查看上次编译任务',self.follow_last)
+        self.follow_button.pack(fill='x')
+        build_outer,build=self.scrollable(build_tab,padding=22);build_outer.pack(fill='both',expand=True)
+        self.wrapped_label(build,text='源码安装完成后，在 NX 上编译',font=(self.face,14,'bold')).pack(fill='x',pady=(0,12))
+        self.wrapped_label(build,text='源码已经安装时，连接板载后即可编译，无需重新上传或再次应用源码。',style='Subtitle.TLabel').pack(fill='x',pady=(0,12))
+        self.field(build,'目标工作区',self.target)
+        self.field(build,'编译模块',self.modules)
+        self.field(build,'并行任务数',self.jobs)
+        self.wrapped_label(build,text='模块用空格分隔，例如 livox_ros_driver2 ekf_odometry。跨版本更新需要编译全部受影响模块及依赖。',style='Subtitle.TLabel').pack(fill='x',pady=7)
+        self.wrapped_label(build,text='编译使用板载 build.sh，在后台记录日志；SSH 断开后继续运行。编译完成不会自动启动飞行节点。',style='Subtitle.TLabel').pack(fill='x',pady=7)
         toolbar=ttk.Frame(terminal);toolbar.pack(fill='x',pady=(0,8))
         ttk.Button(toolbar,text='清空显示',command=self.clear_log).pack(side='left')
         ttk.Button(toolbar,text='保存显示日志',command=self.save_log).pack(side='left',padx=8)
@@ -155,7 +201,7 @@ class App:
         self.command_entry.bind('<Return>',lambda _:self.send_input())
         ttk.Button(inputrow,text='发送',command=self.send_input).pack(side='left',padx=6)
         ttk.Checkbutton(inputrow,text='隐藏输入',variable=self.hide_input,command=lambda:self.command_entry.configure(show='•' if self.hide_input.get() else '')).pack(side='left')
-        ttk.Label(terminal,text='交互终端或安装过程需要密码时，在远端密码提示出现后勾选“隐藏输入”再发送。',style='Subtitle.TLabel').pack(anchor='w',pady=(7,0))
+        self.wrapped_label(terminal,text='交互终端或安装过程需要密码时，在远端密码提示出现后勾选“隐藏输入”再发送。',style='Subtitle.TLabel').pack(fill='x',pady=(7,0))
         footer=ttk.Frame(self.root,padding=(25,0,25,15));footer.grid(row=2,column=0,sticky='ew')
         ttk.Label(footer,textvariable=self.status).pack(anchor='w')
         row=ttk.Frame(footer);row.pack(fill='x',pady=(7,0))

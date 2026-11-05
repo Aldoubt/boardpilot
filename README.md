@@ -10,8 +10,8 @@
 
 在 [Releases](https://github.com/Aldoubt/boardpilot/releases) 下载：
 
-- **Windows x64**：运行 `BoardPilot-0.1.1-windows-x64.exe`，不需要安装 Python。首次打开自解压需要几秒钟。
-- **Ubuntu 22.04 / 24.04 x86_64**：解压 `BoardPilot-0.1.1-linux-x86_64.tar.gz`，在解压目录运行 `bash install.sh`，然后从应用菜单打开 BoardPilot；也可以直接运行其中的 `./BoardPilot`。需要图形桌面以及 `python3`（安装菜单入口时使用），应用运行不需要自行安装 Python 依赖。源码打包还需要 `git`。
+- **Windows x64**：运行 `BoardPilot-0.1.2-windows-x64.exe`，不需要安装 Python。首次打开自解压需要几秒钟。
+- **Ubuntu 22.04 / 24.04 x86_64**：解压 `BoardPilot-0.1.2-linux-x86_64.tar.gz`，在解压目录运行 `bash install.sh`，然后从应用菜单打开 BoardPilot；也可以直接运行其中的 `./BoardPilot`。需要图形桌面以及 `python3`（安装菜单入口时使用），应用运行不需要自行安装 Python 依赖。源码打包还需要 `git`。
 - Linux 安装只写入当前用户目录，不需要 sudo。卸载运行 `bash ~/.local/share/boardpilot/uninstall.sh`；配置和主机指纹会保留。
 - Linux 安装支持 `XDG_DATA_HOME`。ARM64/NX 本机桌面包暂未提供；NX 可作为 SSH 连接的目标。
 - 下载旁边的 `.sha256` 可用于核对文件完整性。当前预览版未做 Windows 代码签名。
@@ -38,6 +38,12 @@ python deployer_gui.py
 
 右上角可选择 100%、125%、150% 缩放，默认 125%，选择后自动保存。
 
+## 0.1.2 窗口与编译入口
+
+- 板载编译移到独立的第 3 页，编译按钮固定在页面底部。
+- 源码、部署、编译内容与连接栏支持滚动；说明随可用宽度换行，150% 缩放下仍能访问操作。
+- 标题显示版本号。源码已安装后，重开助手只需连接并进入第 3 页，无需重复上传或应用。
+
 ## 0.1.1 部署边界修复
 
 - 在预览与应用前检查 Sunray 安装器安全版本。要求安装脚本包含 `readonly SUNRAY_APPLY_SAFETY_VERSION=1`；旧脚本可能误删子模块 `.git`，会被拒绝执行。可将仓库附带的 [安全版安装脚本](presets/sunray/apply_workspace.sh) 复制到工作区内 `tools/workspace_transfer/apply_workspace.sh`，再重新打包。这个文件只负责源码搬运，不修改定位或控制算法。
@@ -53,7 +59,7 @@ python deployer_gui.py
 4. 上传到 `~/boardpilot_incoming`。中断后选择同一个包再次上传可以续传；传完核对校验值，再解压到独立暂存目录。
 5. 选择目标工作区，预览复制与删除计划。预览不停止服务，也不覆盖目标源码。
 6. 确认计划后应用。工具先备份目标源码（不含编译产物和 Git 元数据），再运行包内安装脚本。它会覆盖同名源码并删除包内没有的未忽略源码；相关服务停止后不会自动启动。
-7. 选择模块及并行数，在设备上通过 `build.sh` 编译。例如修改 Livox 驱动与 EKF 时选择 `livox_ros_driver2 ekf_odometry`。修改接口时还需编译相关依赖模块。
+7. 进入 **3 板载编译**，选择模块及并行数，在设备上通过 `build.sh` 编译。例如修改 Livox 驱动与 EKF 时选择 `livox_ros_driver2 ekf_odometry`。修改接口时还需编译相关依赖模块。
 8. 检查结果后，按设备自身流程启动模块与验证。工具不会自动解锁、起飞或发送运动指令。
 
 ## 断线、密码与恢复
