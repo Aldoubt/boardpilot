@@ -16,3 +16,6 @@ known_hosts
 .env.*
 *.pem
 *.key
+
+.build-venv/
+*.spec

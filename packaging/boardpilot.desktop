@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=BoardPilot
+Comment=SSH source deployment assistant
+Exec=BoardPilot
+Icon=boardpilot
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true

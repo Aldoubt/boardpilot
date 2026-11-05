@@ -6,7 +6,17 @@
 
 > 当前版本提供 **Sunray / ROS1 Noetic 预设**。工作区要求 `build.sh`，安装复用工作区中的 `tools/workspace_transfer/apply_workspace.sh`。它还不是任意项目都可直接使用的通用部署器；通用 SSH 和传输功能可以独立使用。
 
-## 启动
+## 桌面版下载（预览版）
+
+在 [Releases](https://github.com/Aldoubt/boardpilot/releases) 下载：
+
+- **Windows x64**：运行 `BoardPilot-0.1.0-windows-x64.exe`，不需要安装 Python。首次打开自解压需要几秒钟。
+- **Ubuntu 22.04 / 24.04 x86_64**：解压 `BoardPilot-0.1.0-linux-x86_64.tar.gz`，在解压目录运行 `bash install.sh`，然后从应用菜单打开 BoardPilot；也可以直接运行其中的 `./BoardPilot`。需要图形桌面以及 `python3`（安装菜单入口时使用），应用运行不需要自行安装 Python 依赖。源码打包还需要 `git`。
+- Linux 安装只写入当前用户目录，不需要 sudo。卸载运行 `bash ~/.local/share/boardpilot/uninstall.sh`；配置和主机指纹会保留。
+- Linux 安装支持 `XDG_DATA_HOME`。ARM64/NX 本机桌面包暂未提供；NX 可作为 SSH 连接的目标。
+- 下载旁边的 `.sha256` 可用于核对文件完整性。当前预览版未做 Windows 代码签名。
+
+## 从源码启动
 
 需要 Python 3.8+、Git，以及可访问目标设备的网络。
 
@@ -65,3 +75,14 @@ python deployer_gui.py --smoke-test
 - Windows 可执行安装包与 Linux 发布包。
 
 当前仓库只包含助手自身代码，不包含无人机业务源码、飞行日志、私钥或个人设备配置。
+
+## 构建桌面包
+
+在目标操作系统运行（不能用 Windows 直接生成 Linux 二进制）：
+
+```bash
+python -m pip install -r requirements-build.txt
+python packaging/build.py
+```
+
+输出位于 `dist/`。GitHub Actions 在 Windows 和 Ubuntu 22.04 分别构建、运行打包后 GUI 冒烟检查，Linux 还检查桌面入口安装与卸载；均通过后发布预览版本。修改 `VERSION` 后推送 main 可发布新版本。
